@@ -10,6 +10,10 @@ dependencies = [
     "numpy<2",
     "pufferlib[cleanrl] @ /home/tim/dev/PufferLib",
     "ipykernel>=6.29.5",
+    "matplotlib>=3.10.1",
+    "opencv-python>=3.4.17.63",
+    "rich-argparse>=1.7.0",
+    "carbs",
 ]
 
 
@@ -86,3 +90,4 @@ docstring-code-line-length = "dynamic"
 
 [tool.uv.sources]
 pufferlib = { path = "../PufferLib", editable = true }
+carbs = { path = "../carbs" }
