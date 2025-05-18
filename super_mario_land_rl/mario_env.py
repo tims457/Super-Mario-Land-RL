@@ -8,12 +8,15 @@ from pyboy.utils import WindowEvent
 
 ROM_PATH = str(Path(__file__).parent.parent.joinpath("super_mario_land.gb"))
 
-SCALE_FACTOR = 1
+SCALE_FACTOR = 2
 
 observation_space = spaces.Dict(
     {
         "screen": spaces.Box(
-            low=0, high=255, shape=(125 // SCALE_FACTOR, 160 // SCALE_FACTOR, 1), dtype=np.uint8
+            low=0,
+            high=255,
+            shape=(126 // SCALE_FACTOR, 160 // SCALE_FACTOR, 1),
+            dtype=np.uint8,
         ),
         # "lives_left": spaces.Box(low=0, high=99, dtype=np.int8),
         # "time_left": spaces.Box(low=0, high=999, dtype=np.uint16),
@@ -28,8 +31,19 @@ DOWN = [WindowEvent.PRESS_ARROW_DOWN]
 LEFT = [WindowEvent.PRESS_ARROW_LEFT]
 RIGHT = [WindowEvent.PRESS_ARROW_RIGHT]
 SELECT = [WindowEvent.PRESS_BUTTON_SELECT]
+LEFT_A = [*LEFT, *PRESS_A]
+RIGHT_A = [*RIGHT, *PRESS_A]
+LEFT_B = [*LEFT, *PRESS_B]
+RIGHT_B = [*RIGHT, *PRESS_B]
+LEFT_A_B = [*LEFT, *PRESS_A, *PRESS_B]
+RIGHT_A_B = [*RIGHT, *PRESS_A, *PRESS_B]
+
 
 ACTIONS = [
+    LEFT_A,
+    RIGHT_A,
+    LEFT_B,
+    RIGHT_B,
     PRESS_A,
     PRESS_B,
     UP,
@@ -37,6 +51,12 @@ ACTIONS = [
     LEFT,
     RIGHT,
     SELECT,
+    LEFT_A,
+    RIGHT_A,
+    LEFT_B,
+    RIGHT_B,
+    LEFT_A_B,
+    RIGHT_A_B,
 ]
 
 # All possible buttons "on hardware"
@@ -63,7 +83,9 @@ RELEASE_BUTTONS = [
 
 # Given a button press, get the "release" version of it
 # ex: release_a = RELEASE_BUTTON_LOOKUP[press_a]
-RELEASE_BUTTON_LOOKUP = {button: r_button for button, r_button in zip(BUTTONS, RELEASE_BUTTONS)}
+RELEASE_BUTTON_LOOKUP = {
+    button: r_button for button, r_button in zip(BUTTONS, RELEASE_BUTTONS)
+}
 
 # How many frames to advance every action
 # 1 = every single frame, a decision is made
@@ -95,20 +117,22 @@ class SuperMarioLandEnv(gym.Env):
 
         self.num_to_tick = DEFAULT_NUM_TO_TICK
 
-        self.old_mem_state = self._get_mem_state_dict()
         self.progress = 0
+        self.old_mem_state = self._get_mem_state_dict()
+
         self.reset()
 
     def reset(self, **kwargs):
         self.pyboy.game_wrapper.reset_game()
+        self.progress = 0
         info = {}
         return self._get_obs(), info
 
     def _get_screen_obs(self):
         # remove top bar with lives, score and remove alpha channel
-        rgb = self.pyboy.screen.ndarray[19:, :, :3]
+        rgb = self.screen.ndarray[18:, :, :3]
 
-        h, w = rgb.shape[:2]
+        # h, w = rgb.shape[:2]
 
         # ?? scale factor? Pufferlib only looks at every SCALE_FACTOR pixels
         smaller = rgb[::SCALE_FACTOR, ::SCALE_FACTOR]
@@ -126,26 +150,33 @@ class SuperMarioLandEnv(gym.Env):
         lives_left = np.array([self.pyboy.game_wrapper.lives_left], dtype=np.int8)
         score = np.array([self.pyboy.game_wrapper.score], dtype=np.uint16)
         coins = np.array([self.pyboy.game_wrapper.coins], dtype=np.uint16)
-        time_left = np.array([self.pyboy.game_wrapper.time_left], dtype=np.uint16)
+        time_left = np.array([self.pyboy.game_wrapper.time_left], dtype=np.float32)
+        level_progress = self.pyboy.game_wrapper.level_progress
+
+        if level_progress > self.progress:
+            self.progress = level_progress
 
         return {
             "lives_left": lives_left,
             "score": score,
             "coins": coins,
             "time_left": time_left,
+            "level_progress": self.progress,
         }
-    
+
     def _get_initial_mem_state(self) -> dict:
-        time_left = np.array([self.pyboy.game_wrapper.time_left], dtype=np.uint16)
+        time_left = np.array([self.pyboy.game_wrapper.time_left], dtype=np.float32)
         return {
             "lives_left": np.array([2], dtype=np.int8),
             "score": np.array([0], dtype=np.uint16),
             "coins": np.array([0], dtype=np.uint16),
             "time_left": time_left,
+            "level_progress": np.array([0], dtype=np.float32),
         }
 
     def _get_obs(self) -> dict:
         screen = self._get_screen_obs()
+        # print(f"screen shape: {screen.shape} mean: {screen.mean()} std: {screen.std()}")
 
         mem_state = self._get_mem_state_dict()
 
@@ -161,17 +192,24 @@ class SuperMarioLandEnv(gym.Env):
         mem_state = self._get_mem_state_dict()
         # print(f"\nold_mem_state {self.old_mem_state}")
         # print(f"mem_state {mem_state}")
-        
+
         deltas = dict()
         for k, v in mem_state.items():
             deltas[k] = v - self.old_mem_state[k]
 
-        reward = max(np.log(deltas["score"]+1e-10), 0.0)
-        reward += deltas["lives_left"]
+        reward = deltas["score"] / 100
+        if deltas["lives_left"] < 0:
+            reward -= 10
         # print(f"deltas {deltas}")
 
+        # reward += deltas['level_progress']/100
+        # reward += deltas['time_left']/100
+
+        reward += deltas["level_progress"] / 500
+        reward += deltas["time_left"] / 100
+
         self.old_mem_state = mem_state
-        
+
         return reward
 
     def do_action_on_emulator(self, action):
@@ -202,7 +240,7 @@ class SuperMarioLandEnv(gym.Env):
 
         self.do_action_on_emulator(action)
 
-        self.pyboy.tick(self.num_to_tick, self.is_render_mode_human)
+        self.pyboy.tick(self.num_to_tick)
 
         obs = self._get_obs()
 
@@ -210,16 +248,22 @@ class SuperMarioLandEnv(gym.Env):
 
         # PyBoy Cython weirdness makes "game_over()" an int
         done = False if self.pyboy.game_wrapper.game_over() == 0 else True
-        if done and self.pyboy.game_wrapper.lives_left == 0:
+
+        if self.pyboy.game_wrapper.time_left == 0:
+            done = True
             reward = np.array([-20], dtype=np.float32)
+
+        if done and (self.pyboy.game_wrapper.lives_left == 0):
+            reward = np.array([-20], dtype=np.float32)
+
+        if done:
             self.old_mem_state = self._get_initial_mem_state()
-        
 
         truncated = False
         info = {}
         # print(f"reward: {reward}, done: {done}, truncated: {truncated}")
         return obs, reward, done, truncated, info
-    
+
     def render(self):
         return self.screen.ndarray
 
@@ -228,4 +272,3 @@ class SuperMarioLandEnv(gym.Env):
 
     def save_screen(self, path="screen.png"):
         cv2.imwrite(path, self.screen.ndarray)
-        
