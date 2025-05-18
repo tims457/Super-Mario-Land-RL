@@ -178,3 +178,4 @@ cython_debug/
 *.png
 super_mario_land.gb.ram
 *.gb.*
+.vscode/launch.json
